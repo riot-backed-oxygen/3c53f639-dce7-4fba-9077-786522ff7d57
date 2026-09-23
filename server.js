@@ -2,7 +2,15 @@
 const path=require('path'),express=require('express'),mysql=require('mysql2/promise');
 const app=express(),port=Number(process.env.PORT||3000);
 const pool=mysql.createPool({host:process.env.DB_HOST||'127.0.0.1',port:Number(process.env.DB_PORT||3306),user:process.env.DB_USER||'root',password:process.env.DB_PASSWORD||'',database:process.env.DB_NAME||'actresses',waitForConnections:true,connectionLimit:10,charset:'utf8mb4'});
-app.use(express.json());app.use(express.static(path.join(__dirname,'public')));
+const { createAnalyticsStore, createVisitTracker, createAnalyticsRouter, configureTrustProxy } = require('./analytics');
+configureTrustProxy(app, process.env.TRUST_PROXY || '');
+const analyticsStore = createAnalyticsStore({ pool });
+const visitTracker = createVisitTracker({ store: analyticsStore });
+app.use(visitTracker.middleware);
+app.use(express.json());
+app.use('/api/analytics', createAnalyticsRouter({ store: analyticsStore, tracker: visitTracker }));
+app.use(express.static(path.join(__dirname,'public')));
+analyticsStore.initialize().catch(error => console.error('[analytics] Initialization failed:', error.code || error.name));
 const { createTranslationRouter } = require('./translation');
 app.use('/api/translate', createTranslationRouter({ email: process.env.MYMEMORY_EMAIL || '' }));
 function parseRow(r){for(const k of ['social_links','listing_data','profile_data'])if(typeof r[k]==='string')try{r[k]=JSON.parse(r[k])}catch{}return r}

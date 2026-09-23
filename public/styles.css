@@ -108,3 +108,7 @@ html,dialog{scrollbar-width:thin;scrollbar-color:#b8b2a5 transparent}
   .image-viewer-nav{top:auto;bottom:22px;transform:none;width:44px;height:44px}
   .image-viewer-prev{left:calc(50% - 56px)}.image-viewer-next{right:calc(50% - 56px)}
 }
+
+/* Public aggregate counts; IP records stay in the database. */
+.site-footer{flex-wrap:wrap;align-items:center;gap:12px 24px}
+.site-footer #visitCount{color:var(--ink);letter-spacing:.04em;line-height:1.7}
