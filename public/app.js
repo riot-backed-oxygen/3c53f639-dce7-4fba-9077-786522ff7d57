@@ -23,16 +23,21 @@ $('#search').oninput=e=>{clearTimeout(window._t);window._t=setTimeout(()=>{state
 
 // Javbus browsing panel
 const javbusDialog=document.createElement('dialog');javbusDialog.id='javbusDialog';javbusDialog.innerHTML='<button class="close" id="javbusClose">×</button><div class="javbus-panel"><div class="eyebrow">JAVBUS / WORKS INDEX</div><div class="javbus-search"><input id="javbusKeyword" placeholder="输入演员姓名检索作品"><button id="javbusSearchBtn">检索作品</button></div><div id="javbusNotice" class="notice hidden"></div><div id="movieGrid" class="movie-grid"></div></div>';document.body.appendChild(javbusDialog);
-const moviePage=document.createElement('dialog');moviePage.id='moviePage';moviePage.innerHTML='<button class="close" id="moviePageClose">×</button><div id="moviePageContent" class="movie-page-content"></div>';document.body.appendChild(moviePage);
+const moviePage=document.createElement('dialog');moviePage.id='moviePage';moviePage.setAttribute('aria-label','作品详情');moviePage.innerHTML='<header class="movie-page-header"><span>作品详情</span><button class="close" id="moviePageClose" aria-label="返回作品列表">×</button></header><div id="moviePageContent" class="movie-page-content"></div>';document.body.appendChild(moviePage);
 function javbusMessage(msg){const n=document.querySelector('#javbusNotice');n.textContent=msg;n.classList.remove('hidden')}
 async function searchMovies(keyword){document.querySelector('#javbusNotice').classList.add('hidden');document.querySelector('#movieGrid').innerHTML='<p class="loading">正在检索…</p>';const oldDetail=document.querySelector('#movieDetail');if(oldDetail)oldDetail.innerHTML='';try{const r=await fetch('/api/javbus/search?keyword='+encodeURIComponent(keyword));const j=await r.json();if(!r.ok)throw Error(j.error);document.querySelector('#movieGrid').innerHTML=(j.movies||[]).map(m=>{const src=proxyImage(m.img||'');return '<article class="movie-card" data-movie="'+esc(m.id)+'"><img class="zoomable-media" src="'+esc(src)+'" alt="'+esc(m.title||m.id||'作品封面')+'" '+lightboxAttrs(src,m.title||m.id||'作品封面','作品封面')+'><div><b>'+esc(m.id)+'</b><p>'+esc(m.title)+'</p><small>'+esc(m.date||'')+'</small></div></article>'}).join('')||'<p class="loading">没有找到作品。</p>';document.querySelectorAll('[data-movie]').forEach(x=>x.onclick=()=>movieDetail(x.dataset.movie))}catch(e){document.querySelector('#movieGrid').innerHTML='';javbusMessage(e.message)}}
-async function movieDetail(id){try{const r=await fetch('/api/javbus/movies/'+encodeURIComponent(id));const m=await r.json();if(!r.ok)throw Error(m.error);const cover=proxyImage(m.img||'');const stars=(m.stars||[]).map(x=>x.name).join('、');const genres=(m.genres||[]).map(x=>'<span>'+esc(x.name)+'</span>').join('');document.querySelector('#moviePageContent').innerHTML='<section class="movie-detail"><div><img class="movie-cover zoomable-media" src="'+esc(cover)+'" alt="'+esc(m.title||m.id||'作品封面')+'" '+lightboxAttrs(cover,m.title||m.id||'作品封面','作品封面')+'></div><div><div class="eyebrow">MOVIE / '+esc(m.id)+'</div><h2>'+esc(m.title)+'</h2><p class="movie-meta">'+esc(m.date||'')+(m.videoLength?' · '+m.videoLength+' min':'')+(stars?' · '+esc(stars):'')+'</p><div class="genres">'+genres+'</div><button class="magnet-btn" id="magnetBtn">查看磁力信息</button><div id="magnetResult"></div></div></section>'+(m.samples&&m.samples.length?'<div class="samples">'+m.samples.map(s=>{const thumbnail=proxyImage(s.thumbnail||s.src||'');const full=proxyImage(s.src||s.thumbnail||'');return '<img class="work-sample zoomable-media" src="'+esc(thumbnail)+'" alt="'+esc(m.title||m.id||'作品样张')+'" loading="lazy" '+lightboxAttrs(full,m.title||m.id||'作品样张','作品样张')+'>'}).join('')+'</div>':'');javbusDialog.close();moviePage.showModal();document.querySelector('#magnetBtn').onclick=()=>loadMagnets(m.id,m.gid,m.uc)}catch(e){javbusMessage(e.message)}}
+async function movieDetail(id){try{const r=await fetch('/api/javbus/movies/'+encodeURIComponent(id));const m=await r.json();if(!r.ok)throw Error(m.error);const cover=proxyImage(m.img||'');const stars=(m.stars||[]).map(x=>x.name).join('、');const genres=(m.genres||[]).map(x=>'<span>'+esc(x.name)+'</span>').join('');document.querySelector('#moviePageContent').innerHTML='<section class="movie-detail"><div><img class="movie-cover zoomable-media" src="'+esc(cover)+'" alt="'+esc(m.title||m.id||'作品封面')+'" '+lightboxAttrs(cover,m.title||m.id||'作品封面','作品封面')+'></div><div><div class="eyebrow">MOVIE / '+esc(m.id)+'</div><h2>'+esc(m.title)+'</h2><p class="movie-meta">'+esc(m.date||'')+(m.videoLength?' · '+m.videoLength+' min':'')+(stars?' · '+esc(stars):'')+'</p><div class="genres">'+genres+'</div><button class="magnet-btn" id="magnetBtn" aria-controls="magnetResult">查看磁力信息</button></div></section><section id="magnetResult" aria-label="磁力资源" aria-live="polite"></section>'+(m.samples&&m.samples.length?'<div class="samples">'+m.samples.map(s=>{const thumbnail=proxyImage(s.thumbnail||s.src||'');const full=proxyImage(s.src||s.thumbnail||'');return '<img class="work-sample zoomable-media" src="'+esc(thumbnail)+'" alt="'+esc(m.title||m.id||'作品样张')+'" loading="lazy" '+lightboxAttrs(full,m.title||m.id||'作品样张','作品样张')+'>'}).join('')+'</div>':'');javbusDialog.close();moviePage.showModal();moviePage.scrollTop=0;document.querySelector('#magnetBtn').onclick=()=>loadMagnets(m.id,m.gid,m.uc)}catch(e){javbusMessage(e.message)}}
+const magnetPreviewCount=5;
+function magnetCopyContent(copied=false){
+  const shape=copied?'<path d="m4 8 3 3 5-6"/>':'<rect x="6" y="6" width="7" height="8" rx="1.5"/><path d="M10 6V3.5A1.5 1.5 0 0 0 8.5 2h-5A1.5 1.5 0 0 0 2 3.5v6A1.5 1.5 0 0 0 3.5 11H6"/>';
+  return '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+shape+'</svg><span>'+(copied?'已复制':'复制链接')+'</span>';
+}
 function renderMagnetRows(items){
   const flag=v=>v===true||v===1||v==='true'||v==='1';
-  return '<div class="magnet-heading"><strong>磁力资源</strong><span>'+items.length+' 条记录</span></div><ul class="magnet-list">'+items.map((m,i)=>{
+  return '<div class="magnet-heading"><div class="magnet-heading-title"><h3>磁力资源</h3><span class="magnet-count">'+items.length+' 条</span></div><span class="magnet-hint">选择资源，复制链接</span></div><ul class="magnet-list" id="magnetList">'+items.map((m,i)=>{
     const valid=typeof m.link==='string'&&/^magnet:\?xt=urn:btih:/i.test(m.link);
-    return '<li class="magnet-row"><div class="magnet-info"><div class="magnet-title">'+esc(m.title||m.id||'未命名资源')+'</div><div class="magnet-meta"><span>'+esc(m.size||'大小未知')+'</span><span>'+esc(m.shareDate||'日期未知')+'</span>'+(flag(m.isHD)?'<span class="magnet-tag">高清</span>':'')+(flag(m.hasSubtitle)?'<span class="magnet-tag subtitle">字幕</span>':'')+'</div></div><button class="magnet-copy" data-index="'+i+'" '+(!valid?'disabled':'')+'>'+(valid?'复制链接':'链接不可用')+'</button></li>';
-  }).join('')+'</ul>';
+    return '<li class="magnet-row"'+(i>=magnetPreviewCount?' hidden':'')+'><span class="magnet-index" aria-hidden="true">'+String(i+1).padStart(2,'0')+'</span><div class="magnet-info"><div class="magnet-title">'+esc(m.title||m.id||'未命名资源')+'</div><div class="magnet-meta"><span class="magnet-size">'+esc(m.size||'大小未知')+'</span><span>'+esc(m.shareDate||'日期未知')+'</span>'+(flag(m.isHD)?'<span class="magnet-tag">高清</span>':'')+(flag(m.hasSubtitle)?'<span class="magnet-tag subtitle">字幕</span>':'')+'</div></div><button class="magnet-copy" data-index="'+i+'" '+(!valid?'disabled':'')+'>'+(valid?magnetCopyContent():'链接不可用')+'</button></li>';
+  }).join('')+'</ul>'+(items.length>magnetPreviewCount?'<button class="magnet-toggle" aria-expanded="false" aria-controls="magnetList"><span>展开其余 '+(items.length-magnetPreviewCount)+' 条资源</span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>':'');
 }
 async function loadMagnets(id,gid,uc){
   const box=document.querySelector('#magnetResult'),button=document.querySelector('#magnetBtn');
@@ -45,13 +50,25 @@ async function loadMagnets(id,gid,uc){
     if(!Array.isArray(items))throw Error('资源数据格式异常，请重试');
     const rows=items.filter(m=>m&&typeof m==='object');
     box.innerHTML=rows.length?renderMagnetRows(rows):'<p class="magnet-status">暂无磁力资源</p>';
+    button.textContent='刷新磁力资源';
+    const toggle=box.querySelector('.magnet-toggle');
+    if(toggle)toggle.onclick=()=>{
+      const expanded=toggle.getAttribute('aria-expanded')!=='true';
+      box.querySelectorAll('.magnet-row').forEach((row,i)=>{row.hidden=!expanded&&i>=magnetPreviewCount});
+      toggle.setAttribute('aria-expanded',String(expanded));
+      toggle.querySelector('span').textContent=expanded?'收起资源列表':'展开其余 '+(rows.length-magnetPreviewCount)+' 条资源';
+      if(!expanded)toggle.scrollIntoView({block:'nearest'});
+    };
     box.querySelectorAll('.magnet-copy').forEach(b=>b.onclick=async()=>{
       const link=rows[Number(b.dataset.index)].link;
+      clearTimeout(b.copyTimer);
       try{
         if(!navigator.clipboard?.writeText)throw Error('clipboard unavailable');
-        await navigator.clipboard.writeText(link);b.textContent='已复制';
-        setTimeout(()=>{b.textContent='复制链接'},1800);
+        await navigator.clipboard.writeText(link);b.innerHTML=magnetCopyContent(true);b.classList.add('is-copied');
+        b.closest('li').querySelector('.magnet-manual')?.remove();
+        b.copyTimer=setTimeout(()=>{b.innerHTML=magnetCopyContent();b.classList.remove('is-copied')},1800);
       }catch{
+        b.classList.remove('is-copied');
         let input=b.closest('li').querySelector('.magnet-manual');
         if(!input){input=document.createElement('input');input.className='magnet-manual';input.readOnly=true;input.setAttribute('aria-label','复制失败，请手动复制磁力链接');b.closest('li').appendChild(input)}
         input.value=link;input.focus();input.select();b.textContent='请手动复制';
