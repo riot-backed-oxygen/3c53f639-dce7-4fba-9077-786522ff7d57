@@ -3,16 +3,60 @@ const proxyImage=u=>u?'/api/image?url='+encodeURIComponent(u):'';const $=s=>docu
 const lightboxAttrs=(src,alt,caption='')=>src?'data-lightbox-src="'+esc(src)+'" data-lightbox-alt="'+esc(alt||'')+'" data-lightbox-caption="'+esc(caption||'')+'" tabindex="0" role="button"':'';
 const imageViewer=document.createElement('dialog');
 imageViewer.id='imageViewer';
-imageViewer.innerHTML='<div class="image-viewer-shell"><button class="close image-viewer-close" id="imageViewerClose" aria-label="关闭图片预览">×</button><figure class="image-viewer-figure"><img id="imageViewerImage" alt=""><figcaption id="imageViewerCaption"></figcaption></figure></div>';
+imageViewer.setAttribute('aria-label','图片预览');
+imageViewer.innerHTML='<div class="image-viewer-shell"><button class="close image-viewer-close" id="imageViewerClose" aria-label="关闭图片预览">×</button><button class="image-viewer-nav image-viewer-prev" id="imageViewerPrev" aria-label="上一张" title="上一张（←）" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button><figure class="image-viewer-figure"><img id="imageViewerImage" alt="" draggable="false"><figcaption class="image-viewer-caption"><span id="imageViewerCaption"></span><span id="imageViewerCounter" role="status" aria-live="polite" aria-atomic="true" hidden></span></figcaption></figure><button class="image-viewer-nav image-viewer-next" id="imageViewerNext" aria-label="下一张" title="下一张（→）" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button></div>';
 document.body.appendChild(imageViewer);
 const imageViewerImage=$('#imageViewerImage'),imageViewerCaption=$('#imageViewerCaption');
-function openImageViewer(src,alt='',caption=''){if(!src)return;imageViewerImage.src=src;imageViewerImage.alt=alt;imageViewerCaption.textContent=caption||alt;imageViewer.showModal()}
+const imageViewerPrev=$('#imageViewerPrev'),imageViewerNext=$('#imageViewerNext'),imageViewerCounter=$('#imageViewerCounter');
+const imageGallery={items:[],index:0,touchStart:null};
+function renderImageViewer(){
+  const item=imageGallery.items[imageGallery.index];if(!item)return;
+  imageViewerImage.src=item.src;imageViewerImage.alt=item.alt;
+  imageViewerCaption.textContent=item.caption||item.alt;
+  const multiple=imageGallery.items.length>1;
+  imageViewerPrev.hidden=imageViewerNext.hidden=imageViewerCounter.hidden=!multiple;
+  imageViewerCounter.textContent=multiple?(imageGallery.index+1)+' / '+imageGallery.items.length:'';
+}
+function openImageViewer(target){
+  if(!target.dataset.lightboxSrc)return;
+  const group=target.closest('.samples');
+  const images=group?Array.from(group.querySelectorAll('[data-lightbox-src]')):[target];
+  imageGallery.items=images.map(el=>({src:el.dataset.lightboxSrc,alt:el.dataset.lightboxAlt||el.alt||'',caption:el.dataset.lightboxCaption||''}));
+  imageGallery.index=Math.max(0,images.indexOf(target));imageGallery.touchStart=null;
+  renderImageViewer();if(!imageViewer.open)imageViewer.showModal();
+}
+function stepImageViewer(direction){
+  if(!imageViewer.open||imageGallery.items.length<2)return;
+  imageGallery.index=(imageGallery.index+direction+imageGallery.items.length)%imageGallery.items.length;
+  renderImageViewer();
+}
 function closeImageViewer(){if(imageViewer.open)imageViewer.close()}
-document.addEventListener('click',e=>{const target=e.target.closest?.('[data-lightbox-src]');if(!target)return;e.preventDefault();e.stopPropagation();openImageViewer(target.dataset.lightboxSrc,target.dataset.lightboxAlt||target.alt,target.dataset.lightboxCaption||'')},true);
-document.addEventListener('keydown',e=>{const target=e.target.closest?.('[data-lightbox-src]');if(target&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openImageViewer(target.dataset.lightboxSrc,target.dataset.lightboxAlt||target.alt,target.dataset.lightboxCaption||'')}});
+document.addEventListener('click',e=>{const target=e.target.closest?.('[data-lightbox-src]');if(!target)return;e.preventDefault();e.stopPropagation();openImageViewer(target)},true);
+document.addEventListener('keydown',e=>{const target=e.target.closest?.('[data-lightbox-src]');if(target&&(e.key==='Enter'||e.key===' ')){e.preventDefault();openImageViewer(target)}});
 $('#imageViewerClose').onclick=closeImageViewer;
+imageViewerPrev.onclick=()=>stepImageViewer(-1);
+imageViewerNext.onclick=()=>stepImageViewer(1);
+imageViewer.addEventListener('keydown',e=>{
+  if(e.altKey||e.ctrlKey||e.metaKey||!['ArrowLeft','ArrowRight'].includes(e.key))return;
+  e.preventDefault();e.stopPropagation();stepImageViewer(e.key==='ArrowLeft'?-1:1);
+});
+const imageViewerFigure=imageViewer.querySelector('.image-viewer-figure');
+imageViewerFigure.addEventListener('touchstart',e=>{
+  imageGallery.touchStart=e.touches.length===1?{x:e.touches[0].clientX,y:e.touches[0].clientY}:null;
+},{passive:true});
+imageViewerFigure.addEventListener('touchend',e=>{
+  const start=imageGallery.touchStart;imageGallery.touchStart=null;
+  if(!start||e.touches.length||!e.changedTouches.length)return;
+  const dx=e.changedTouches[0].clientX-start.x,dy=e.changedTouches[0].clientY-start.y;
+  if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.2)stepImageViewer(dx<0?1:-1);
+},{passive:true});
+imageViewerFigure.addEventListener('touchcancel',()=>{imageGallery.touchStart=null},{passive:true});
 imageViewer.onclick=e=>{if(e.target===imageViewer||e.target.classList.contains('image-viewer-shell'))closeImageViewer()};
-imageViewer.addEventListener('close',()=>{imageViewerImage.removeAttribute('src');imageViewerCaption.textContent='' });
+imageViewer.addEventListener('close',()=>{
+  imageViewerImage.removeAttribute('src');imageViewerCaption.textContent='';imageViewerCounter.textContent='';
+  imageViewerPrev.hidden=imageViewerNext.hidden=imageViewerCounter.hidden=true;
+  imageGallery.items=[];imageGallery.index=0;imageGallery.touchStart=null;
+});
 const advanced=document.createElement('div');advanced.className='advanced';advanced.innerHTML='<span class="adv-label">高级检索</span><input data-k="age_min" type="number" min="0" placeholder="年龄 ≥"><input data-k="age_max" type="number" min="0" placeholder="年龄 ≤"><input data-k="bust_min" type="number" min="0" placeholder="胸围 ≥"><input data-k="bust_max" type="number" min="0" placeholder="胸围 ≤"><input data-k="waist_min" type="number" min="0" placeholder="腰围 ≥"><input data-k="waist_max" type="number" min="0" placeholder="腰围 ≤"><input data-k="hip_min" type="number" min="0" placeholder="臀围 ≥"><input data-k="hip_max" type="number" min="0" placeholder="臀围 ≤"><input data-k="cup" placeholder="罩杯，如 C"><button id="applyAdvanced">应用</button>';document.querySelector('.toolbar').after(advanced);
 function card(a){const src=img(a);return '<article class="card" data-id="'+esc(a.actress_id)+'"><div class="portrait">'+(src?'<img loading="lazy" class="zoomable-media" src="'+esc(src)+'" alt="'+esc(a.name)+'" '+lightboxAttrs(src,a.name,'演员预览图')+'>':'')+'<span class="badge">'+esc(a.actress_id)+'</span></div><div class="card-info"><h2>'+esc(a.name)+'</h2><p>'+esc(a.name_kana||'')+(a.birthplace?' · '+esc(a.birthplace):'')+'</p></div></article>'}
 async function load(){const q=new URLSearchParams({page:state.page,limit:state.limit,sort:state.sort,direction:state.direction});Object.keys(state).filter(k=>k.endsWith('_min')||k.endsWith('_max')||k==='cup').forEach(k=>{if(state[k])q.set(k,state[k])});if(state.search)q.set('search',state.search);try{const r=await fetch('/api/actresses?'+q),j=await r.json();if(!r.ok)throw Error(j.error);$('#notice').classList.add('hidden');$('#totalTop').textContent=Number(j.pagination.total).toLocaleString();$('#grid').innerHTML=j.data.map(card).join('');$('#empty').classList.toggle('hidden',j.data.length>0);$('#pageLabel').textContent=j.pagination.page+' / '+Math.max(1,j.pagination.pages);$('#prev').disabled=state.page<=1;$('#next').disabled=state.page>=j.pagination.pages;document.querySelectorAll('.card').forEach(c=>c.onclick=()=>showDetail(c.dataset.id))}catch(e){$('#notice').textContent=e.message;$('#notice').classList.remove('hidden');$('#grid').innerHTML='';$('#empty').classList.add('hidden')}}
