@@ -9,6 +9,7 @@ const SHANGHAI_OFFSET_MS = 8 * 3600000;
 const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS site_visits (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   visited_at DATETIME(3) NOT NULL,
+  utc_offset_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   ip VARCHAR(45) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   path VARCHAR(1024) NOT NULL,
   user_agent VARCHAR(512) NOT NULL,
@@ -17,7 +18,8 @@ const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS site_visits (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
 
 function sqlDate(date) {
-  return date.toISOString().slice(0, 23).replace('T', ' ');
+  // DATETIME stores a wall-clock value, independent of Node/MySQL's local timezone.
+  return new Date(date.getTime() + SHANGHAI_OFFSET_MS).toISOString().slice(0, 23).replace('T', ' ');
 }
 
 function dayRange(day) {
@@ -54,11 +56,30 @@ function boundedText(value, length) {
   return Array.from(String(value || '').replace(/[\u0000-\u001f\u007f]/g, '')).slice(0, length).join('');
 }
 
+async function initializeAnalyticsSchema(pool) {
+  await pool.query(CREATE_TABLE_SQL);
+  const [columns] = await pool.query("SHOW COLUMNS FROM site_visits LIKE 'utc_offset_minutes'");
+  if (!columns.length) {
+    try {
+      await pool.query('ALTER TABLE site_visits ADD COLUMN utc_offset_minutes SMALLINT UNSIGNED NOT NULL DEFAULT 0');
+    } catch (error) {
+      // Another process may have added the column while this one was starting.
+      if (error.code !== 'ER_DUP_FIELDNAME') throw error;
+    }
+  }
+  // The timestamp and marker change in one atomic UPDATE, so retries never shift twice.
+  // The zero default also identifies writes from an old process during deployment.
+  const [result] = await pool.query(`UPDATE site_visits
+    SET visited_at = DATE_ADD(visited_at, INTERVAL 8 HOUR), utc_offset_minutes = 480
+    WHERE utc_offset_minutes = 0`);
+  return { convertedVisits: Number(result.affectedRows) };
+}
+
 function createAnalyticsStore({ pool, now = () => new Date() }) {
   let initialization;
   function initialize() {
     if (!initialization) {
-      initialization = pool.query(CREATE_TABLE_SQL).catch(error => {
+      initialization = initializeAnalyticsSchema(pool).catch(error => {
         initialization = undefined;
         throw error;
       });
@@ -68,18 +89,22 @@ function createAnalyticsStore({ pool, now = () => new Date() }) {
   return {
     initialize,
     async record({ ip, pathname, userAgent, visitedAt = now() }) {
+      const normalizedIp = normalizeIp(ip);
+      if (!normalizedIp) throw new TypeError('A valid IPv4 or IPv6 address is required');
       await initialize();
-      await pool.query('INSERT INTO site_visits (visited_at, ip, path, user_agent) VALUES (?, ?, ?, ?)', [
-        sqlDate(visitedAt), ip, boundedText(pathname, 1024), boundedText(userAgent, 512),
+      await pool.query('INSERT INTO site_visits (visited_at, ip, path, user_agent, utc_offset_minutes) VALUES (?, ?, ?, ?, 480)', [
+        sqlDate(visitedAt), normalizedIp, boundedText(pathname, 1024), boundedText(userAgent, 512),
       ]);
     },
     async summary() {
       const day = new Date(now().getTime() + SHANGHAI_OFFSET_MS).toISOString().slice(0, 10);
       const bounds = dayRange(day);
       await initialize();
+      // Keep counts correct if an older process writes UTC during a rolling restart.
+      const localTime = 'CASE WHEN utc_offset_minutes = 0 THEN DATE_ADD(visited_at, INTERVAL 8 HOUR) ELSE visited_at END';
       const [[row]] = await pool.query(`SELECT COUNT(*) AS totalVisits, COUNT(DISTINCT ip) AS uniqueIps,
-        COALESCE(SUM(visited_at >= ? AND visited_at < ?), 0) AS todayVisits,
-        COUNT(DISTINCT CASE WHEN visited_at >= ? AND visited_at < ? THEN ip END) AS todayIps
+        COALESCE(SUM((${localTime}) >= ? AND (${localTime}) < ?), 0) AS todayVisits,
+        COUNT(DISTINCT CASE WHEN (${localTime}) >= ? AND (${localTime}) < ? THEN ip END) AS todayIps
         FROM site_visits`, [...bounds, ...bounds]);
       return {
         totalVisits: Number(row.totalVisits), todayVisits: Number(row.todayVisits),
@@ -119,9 +144,19 @@ function createVisitTracker({ store, onError = error => console.error('[analytic
   return { middleware, flush: () => Promise.all([...pending]) };
 }
 
-function configureTrustProxy(app, value = '') {
-  const proxies = value.trim();
-  app.set('trust proxy', proxies ? proxies.split(',').map(proxy => proxy.trim()).filter(Boolean) : false);
+function configureTrustProxy(app, value = '', { isRender = process.env.RENDER === 'true' } = {}) {
+  // Render's public endpoint forwards through its managed proxy. A custom domain
+  // on the same service uses that same path; additional proxies can override this.
+  const proxies = value.trim() || (isRender ? '1' : '');
+  if (!proxies || proxies === 'false' || proxies === '0') {
+    app.set('trust proxy', false);
+  } else if (/^\d+$/.test(proxies)) {
+    const hops = Number(proxies);
+    if (!Number.isSafeInteger(hops)) throw new RangeError('TRUST_PROXY hop count is too large');
+    app.set('trust proxy', hops);
+  } else {
+    app.set('trust proxy', proxies.split(',').map(proxy => proxy.trim()).filter(Boolean));
+  }
 }
 
 function createAnalyticsRouter({ store, tracker, onError = error => console.error('[analytics] Read failed:', error.code || error.name) }) {

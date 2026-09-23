@@ -45,3 +45,35 @@ test('bad numeric input is rejected before reaching MySQL', () => {
     { age_min: '36', age_max: '25' }, { hip_min: 'Infinity' }, { page: 'Infinity' },
   ]) assert.throws(() => buildActressQueries(query), RangeError);
 });
+
+test('height range is inclusive and combines with age, measurements, sorting and pagination', () => {
+  const q = buildActressQueries({
+    age_min: '25', height_min: '160', height_max: '170', hip_min: '90',
+    sort: 'birthday', direction: 'asc', page: '2', limit: '24',
+  });
+  assert.match(q.countSql, /height_cm >= \? AND height_cm <= \?/);
+  assert.match(q.rowsSql, /height_cm >= \? AND height_cm <= \?/);
+  assert.deepEqual(q.countArgs, [25, 160, 170, 90]);
+  assert.deepEqual(q.rowsArgs, [25, 160, 170, 90, 24, 24]);
+  assert.match(q.rowsSql, /ORDER BY birthday ASC, actress_id ASC/);
+});
+
+test('height supports omitted, empty, one-sided and equal bounds', () => {
+  for (const query of [{}, { height_min: '', height_max: '' }]) {
+    const q = buildActressQueries(query);
+    assert.deepEqual(q.countArgs, []);
+    assert.doesNotMatch(q.countSql, /height_cm/);
+  }
+  assert.deepEqual(buildActressQueries({ height_min: '160' }).countArgs, [160]);
+  assert.deepEqual(buildActressQueries({ height_max: '170' }).countArgs, [170]);
+  assert.deepEqual(buildActressQueries({ height_min: '165', height_max: '165' }).countArgs, [165, 165]);
+  assert.deepEqual(buildActressQueries({ height_min: '0', height_max: '160.5' }).countArgs, [0, 160.5]);
+});
+
+test('invalid heights and reversed ranges are rejected before SQL execution', () => {
+  for (const value of ['-1', 'NaN', 'Infinity', ' ', '160 OR 1=1', ['160'], {}, true, null]) {
+    assert.throws(() => buildActressQueries({ height_min: value }), RangeError);
+    assert.throws(() => buildActressQueries({ height_max: value }), RangeError);
+  }
+  assert.throws(() => buildActressQueries({ height_min: '170', height_max: '160' }), RangeError);
+});

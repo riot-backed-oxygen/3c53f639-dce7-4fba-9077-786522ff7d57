@@ -8,7 +8,7 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 const { createAnalyticsStore, createVisitTracker, createAnalyticsRouter, configureTrustProxy, dayRange, normalizeIp } = require('../analytics');
 
-async function site(t, { proxy = '', record, summary } = {}) {
+async function site(t, { proxy = '', render = false, record, summary } = {}) {
   const records = [], errors = [];
   const store = {
     record: record || (async value => { records.push(value); }),
@@ -17,7 +17,7 @@ async function site(t, { proxy = '', record, summary } = {}) {
       date: '2026-09-24', timeZone: 'Asia/Shanghai' })),
   };
   const app = express();
-  configureTrustProxy(app, proxy);
+  configureTrustProxy(app, proxy, { isRender: render });
   const tracker = createVisitTracker({ store, onError: error => errors.push(error) });
   app.use(tracker.middleware);
   app.use('/api/analytics', createAnalyticsRouter({ store, tracker, onError: error => errors.push(error) }));
@@ -102,6 +102,26 @@ test('untrusted immediate peers cannot supply the visitor IP', async t => {
   assert.equal(records[0].ip, '127.0.0.1');
 });
 
+test('Render receives IPv4 and IPv6 from its proxy with either the Render or custom hostname', async t => {
+  const { records, request, tracker } = await site(t, { render: true });
+  await request('/', { headers: { Host: 'example.onrender.com', 'X-Forwarded-For': '198.51.100.20' } });
+  await request('/', { headers: { Host: 'archive.example.com', 'X-Forwarded-For': '2001:db8::20' } });
+  await request('/', { headers: { 'X-Forwarded-For': '203.0.113.99, 198.51.100.20' } });
+  await tracker.flush();
+  assert.deepEqual(records.map(record => record.ip), ['198.51.100.20', '2001:db8::20', '198.51.100.20']);
+});
+
+test('explicit proxy configuration overrides Render defaults for additional trusted hops or direct access', async t => {
+  const extraProxy = await site(t, { render: true, proxy: '2' });
+  await extraProxy.request('/', { headers: { 'X-Forwarded-For': '192.0.2.99, 198.51.100.20, 203.0.113.30' } });
+  await extraProxy.tracker.flush();
+  assert.equal(extraProxy.records[0].ip, '198.51.100.20');
+  const direct = await site(t, { render: true, proxy: '0' });
+  await direct.request('/', { headers: { 'X-Forwarded-For': '198.51.100.20' } });
+  await direct.tracker.flush();
+  assert.equal(direct.records[0].ip, '127.0.0.1');
+});
+
 test('IP normalization handles mapped IPv4 and equivalent IPv6 spellings', () => {
   assert.equal(normalizeIp('::ffff:192.0.2.1'), '192.0.2.1');
   assert.equal(normalizeIp('::ffff:c000:201'), '192.0.2.1');
@@ -169,8 +189,9 @@ test('database read failures produce a retryable response without leaking databa
 });
 
 test('Shanghai day boundaries are UTC+8 including month and leap-year transitions', () => {
-  assert.deepEqual(dayRange('2026-09-24'), ['2026-09-23 16:00:00.000', '2026-09-24 16:00:00.000']);
-  assert.deepEqual(dayRange('2024-03-01'), ['2024-02-29 16:00:00.000', '2024-03-01 16:00:00.000']);
+  assert.deepEqual(dayRange('2026-09-24'), ['2026-09-24 00:00:00.000', '2026-09-25 00:00:00.000']);
+  assert.deepEqual(dayRange('2024-02-29'), ['2024-02-29 00:00:00.000', '2024-03-01 00:00:00.000']);
+  assert.deepEqual(dayRange('2026-12-31'), ['2026-12-31 00:00:00.000', '2027-01-01 00:00:00.000']);
   for (const day of ['2026-02-29', '2026-13-01', 'bad', [], '2026-9-24']) assert.throws(() => dayRange(day), RangeError);
 });
 
@@ -183,6 +204,8 @@ test('schema failures retry, concurrent initialization is shared and inserts rem
       await delay(5);
       return [];
     }
+    if (sql.startsWith('SHOW COLUMNS')) return [[{ Field: 'utc_offset_minutes' }]];
+    if (sql.startsWith('UPDATE site_visits')) return [{ affectedRows: 0 }];
     inserts.push({ sql, args });
     return [];
   } };
@@ -195,7 +218,7 @@ test('schema failures retry, concurrent initialization is shared and inserts rem
   assert.equal(inserts.length, 8);
   const { sql, args } = inserts[0];
   assert.ok(!sql.includes(attack));
-  assert.equal(args[0], '2026-09-23 16:00:00.123');
+  assert.equal(args[0], '2026-09-24 00:00:00.123');
   assert.equal(args[2].length, 1024);
   assert.equal(Array.from(args[3]).length, 512);
   assert.ok(args[3].startsWith(attack));
@@ -208,6 +231,8 @@ test('summary converts MySQL counters and rolls the day over at Shanghai midnigh
   const ranges = [];
   const pool = { query: async (sql, args) => {
     if (sql.startsWith('CREATE TABLE')) return [];
+    if (sql.startsWith('SHOW COLUMNS')) return [[{ Field: 'utc_offset_minutes' }]];
+    if (sql.startsWith('UPDATE site_visits')) return [{ affectedRows: 0 }];
     ranges.push(args);
     return [[{ totalVisits: '8', uniqueIps: '3', todayVisits: '0', todayIps: '0' }]];
   } };
@@ -218,5 +243,12 @@ test('summary converts MySQL counters and rolls the day over at Shanghai midnigh
   assert.equal(before.totalVisits, 8);
   clock = new Date('2026-09-23T16:00:00.000Z');
   assert.equal((await store.summary()).date, '2026-09-24');
-  assert.deepEqual(ranges[1], ['2026-09-23 16:00:00.000', '2026-09-24 16:00:00.000', '2026-09-23 16:00:00.000', '2026-09-24 16:00:00.000']);
+  assert.deepEqual(ranges[1], ['2026-09-24 00:00:00.000', '2026-09-25 00:00:00.000', '2026-09-24 00:00:00.000', '2026-09-25 00:00:00.000']);
+});
+
+test('storage rejects invalid IP values before accessing the database', async () => {
+  const store = createAnalyticsStore({ pool: { query: () => assert.fail('Invalid IP reached the database') } });
+  for (const ip of [undefined, 'unknown', '1.2.3.999', '198.51.100.20, 203.0.113.30']) {
+    await assert.rejects(store.record({ ip, pathname: '/' }), TypeError);
+  }
 });

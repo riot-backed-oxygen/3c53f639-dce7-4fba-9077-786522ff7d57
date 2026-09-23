@@ -11,6 +11,19 @@ function ageParameter(query, key) {
   return value;
 }
 
+function heightParameter(query, key) {
+  const raw = query[key];
+  if (raw === undefined || raw === '') return null;
+  if (!['string', 'number'].includes(typeof raw) || String(raw).trim() === '') {
+    throw new RangeError('身高必须是有效的非负数，单位为厘米。');
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError('身高必须是有效的非负数，单位为厘米。');
+  }
+  return value;
+}
+
 function buildActressQueries(query) {
   const page = Math.max(1, Math.trunc(Number(query.page)) || 1);
   const limit = Math.min(48, Math.max(6, Math.trunc(Number(query.limit)) || 12));
@@ -41,6 +54,19 @@ function buildActressQueries(query) {
     // Age <= N includes everyone who has not reached their (N + 1)th birthday.
     clauses.push('birthday > DATE_SUB(CURDATE(), INTERVAL ? YEAR)');
     args.push(maxAge + 1);
+  }
+  const minHeight = heightParameter(query, 'height_min');
+  const maxHeight = heightParameter(query, 'height_max');
+  if (minHeight !== null && maxHeight !== null && minHeight > maxHeight) {
+    throw new RangeError('身高下限不能大于上限。');
+  }
+  if (minHeight !== null) {
+    clauses.push('height_cm >= ?');
+    args.push(minHeight);
+  }
+  if (maxHeight !== null) {
+    clauses.push('height_cm <= ?');
+    args.push(maxHeight);
   }
   for (const [lo, hi, column] of [
     ['bust_min', 'bust_max', 'bust_cm'],
