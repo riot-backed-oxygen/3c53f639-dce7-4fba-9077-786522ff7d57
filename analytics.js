@@ -104,9 +104,11 @@ function createAnalyticsStore({ pool, now = () => new Date() }) {
     async record({ ip, pathname, userAgent, visitedAt = now() }) {
       const normalizedIp = normalizeIp(ip);
       if (!normalizedIp) throw new TypeError('A valid IPv4 or IPv6 address is required');
+      const storedUserAgent = boundedText(userAgent, 512);
+      if (!storedUserAgent.trim()) return;
       await initialize();
       await pool.query('INSERT INTO site_visits (visited_at, ip, path, user_agent, utc_offset_minutes) VALUES (?, ?, ?, ?, 480)', [
-        sqlDate(visitedAt), normalizedIp, boundedText(pathname, 1024), boundedText(userAgent, 512),
+        sqlDate(visitedAt), normalizedIp, boundedText(pathname, 1024), storedUserAgent,
       ]);
     },
     async summary() {

@@ -297,6 +297,13 @@ test('summary converts MySQL counters and rolls the day over at Shanghai midnigh
   assert.deepEqual(ranges[1], ['2026-09-24 00:00:00.000', '2026-09-25 00:00:00.000', '2026-09-24 00:00:00.000', '2026-09-25 00:00:00.000']);
 });
 
+test('storage skips missing, empty or sanitized blank User-Agent values without accessing the database', async () => {
+  const store = createAnalyticsStore({ pool: { query: () => assert.fail('Empty User-Agent reached the database') } });
+  for (const userAgent of [undefined, null, '', '   ', '\t\r\n', ' \u0000\u001f\u007f ', ' '.repeat(512) + 'Browser/1.0']) {
+    await store.record({ ip: '192.0.2.1', pathname: '/', userAgent });
+  }
+});
+
 test('storage rejects invalid IP values before accessing the database', async () => {
   const store = createAnalyticsStore({ pool: { query: () => assert.fail('Invalid IP reached the database') } });
   for (const ip of [undefined, 'unknown', '1.2.3.999', '198.51.100.20, 203.0.113.30']) {
