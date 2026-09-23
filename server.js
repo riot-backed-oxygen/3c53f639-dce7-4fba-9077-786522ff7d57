@@ -3,6 +3,8 @@ const path=require('path'),express=require('express'),mysql=require('mysql2/prom
 const app=express(),port=Number(process.env.PORT||3000);
 const pool=mysql.createPool({host:process.env.DB_HOST||'127.0.0.1',port:Number(process.env.DB_PORT||3306),user:process.env.DB_USER||'root',password:process.env.DB_PASSWORD||'',database:process.env.DB_NAME||'actresses',waitForConnections:true,connectionLimit:10,charset:'utf8mb4'});
 app.use(express.json());app.use(express.static(path.join(__dirname,'public')));
+const { createTranslationRouter } = require('./translation');
+app.use('/api/translate', createTranslationRouter({ email: process.env.MYMEMORY_EMAIL || '' }));
 function parseRow(r){for(const k of ['social_links','listing_data','profile_data'])if(typeof r[k]==='string')try{r[k]=JSON.parse(r[k])}catch{}return r}
 const { buildActressQueries } = require('./actress-query');
 app.get('/api/actresses', async (req, res) => {
