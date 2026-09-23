@@ -33,13 +33,22 @@ LIMIT 100;
 
 ## 反向代理
 
-在 Render 部署时，自动识别平台的 `RENDER=true` 环境变量，使用 `trust proxy = 1`，
-从平台转发的 `X-Forwarded-For` 中取得访客 IP。本地运行默认使用直连 IP，忽略转发头。
-Render 上如需显式配置，可在服务的 Environment 页面设置 `TRUST_PROXY=1`。
+在 Render 部署时，自动识别平台的 `RENDER=true` 环境变量，按可信网段解析
+`X-Forwarded-For`，不再固定只信任一层代理。Render 链路可能包含多台 `10.x` 内网节点，
+固定一层会把其中一台代理的地址误记为访客 IP。
+
+默认信任本机回环、内网/链路本地网段和 Cloudflare 官方代理网段；Express 从应用连接
+开始、从右向左检查转发链，越过可信代理后，在第一个不可信地址处停止，作为访客 IP。
+例如 `203.0.113.20, 172.64.10.1, 10.29.235.113, 10.31.28.2` 会得到 `203.0.113.20`。
+不会直接取最左侧地址，也不会从请求头中任意挑一个公网地址；客户端伪造的更左侧地址不会被采用。
+
+Render 上如需显式配置，可在服务的 Environment 页面设置 `TRUST_PROXY=render`。
+兼容此前配置：当 `RENDER=true` 且 `TRUST_PROXY=1` 时，也会使用新的 Render 解析方式。
+本地运行默认使用直连 IP，忽略转发头；Render 以外显式设置数字 `1` 仍表示信任一跳。
 
 把自定义域名直接绑定到同一个 Render 服务不会改变代理链，无需调整。
-若在 Render 外再添加 Cloudflare 橙云、CDN 或自己的反向代理，应按实际可信的代理链设置
-`TRUST_PROXY`。支持代理跳数或 IP/CIDR 列表；跳数表示从应用向外信任多少跳，不能随意设大。
+Cloudflare 官方代理网段已包含在 Render 模式中。若再添加其他 CDN 或自己的反向代理，应按实际可信的代理链设置
+`TRUST_PROXY`。也支持代理跳数或 IP/CIDR 列表；跳数表示从应用向外信任多少跳，不能随意设大。
 不要盲取转发头的第一个地址。设置 `TRUST_PROXY=0` 可显式关闭代理信任。
 
 若通过 Nginx 等代理访问，请在 `.env` 设置 `TRUST_PROXY` 为实际可信的代理 IP/CIDR，
@@ -67,10 +76,13 @@ location / {
 通过代理访问却只看到 `::1` 时，说明应用拿到的是代理连接地址，需要配置可信代理并保证
 代理转发 `X-Forwarded-For`。公网 IPv4 会保存为如 `203.0.113.20`，IPv6 会保存为如
 `2001:db8::20`。系统保留真实地址类型，不把 IPv6 随意改为 IPv4。
-历史 `::1` 记录没有保存转发头，无法还原当时的原始访客 IP。
+历史 `::1` 和 `10.x` 记录没有保存转发头，无法还原当时的原始访客 IP。
+若请求本身来自内网探活或转发头未提供原始访客 IP，只能记录实际可确认的地址，不能凭空转换成公网 IP。
 
 重新部署更新后的服务时，会自动迁移历史 UTC 时间，并启用新的 IP 获取规则。
 参考：[Render 关于获取客户端 IP 的说明](https://render.com/articles/how-render-handles-ddos-attacks)。
+可信网段依据：[Cloudflare 官方 IP 列表](https://api.cloudflare.com/client/v4/ips)；
+解析规则：[Express 的反向代理配置](https://expressjs.com/en/guide/behind-proxies.html)。
 
 ## 验证
 

@@ -6,6 +6,19 @@ const path = require('node:path');
 
 const DAY_MS = 86400000;
 const SHANGHAI_OFFSET_MS = 8 * 3600000;
+// Render forwards through private load balancers and Cloudflare. Their hop count
+// can vary, so trust the proxy networks and stop at the first other address.
+// Cloudflare's official ranges, checked 2026-09-24:
+// https://api.cloudflare.com/client/v4/ips
+const RENDER_TRUSTED_PROXIES = [
+  'loopback', 'linklocal', 'uniquelocal',
+  '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+  '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+  '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+  '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+  '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+  '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+];
 const CREATE_TABLE_SQL = `CREATE TABLE IF NOT EXISTS site_visits (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   visited_at DATETIME(3) NOT NULL,
@@ -145,10 +158,12 @@ function createVisitTracker({ store, onError = error => console.error('[analytic
 }
 
 function configureTrustProxy(app, value = '', { isRender = process.env.RENDER === 'true' } = {}) {
-  // Render's public endpoint forwards through its managed proxy. A custom domain
-  // on the same service uses that same path; additional proxies can override this.
-  const proxies = value.trim() || (isRender ? '1' : '');
-  if (!proxies || proxies === 'false' || proxies === '0') {
+  const proxies = value.trim();
+  // Upgrade the old Render recommendation (TRUST_PROXY=1) as well, so existing
+  // deployments do not keep selecting the last private load balancer in XFF.
+  if (proxies === 'render' || (isRender && (!proxies || proxies === '1'))) {
+    app.set('trust proxy', RENDER_TRUSTED_PROXIES);
+  } else if (!proxies || proxies === 'false' || proxies === '0') {
     app.set('trust proxy', false);
   } else if (/^\d+$/.test(proxies)) {
     const hops = Number(proxies);

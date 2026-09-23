@@ -111,6 +111,57 @@ test('Render receives IPv4 and IPv6 from its proxy with either the Render or cus
   assert.deepEqual(records.map(record => record.ip), ['198.51.100.20', '2001:db8::20', '198.51.100.20']);
 });
 
+test('Render traverses the private proxy addresses seen in production for IPv4 and IPv6 visitors', async t => {
+  const { records, request, tracker } = await site(t, { render: true });
+  await request('/', { headers: { 'X-Forwarded-For': '198.51.100.20, 10.29.235.113' } });
+  await request('/', { headers: { 'X-Forwarded-For': '2001:db8::20, 10.29.235.113, 10.31.28.2' } });
+  await request('/', { headers: { 'X-Forwarded-For': '::ffff:198.51.100.20, ::ffff:10.28.122.132, fd00::1' } });
+  await tracker.flush();
+  assert.deepEqual(records.map(record => record.ip), ['198.51.100.20', '2001:db8::20', '198.51.100.20']);
+});
+
+test('Render passes Cloudflare IPv4/IPv6 edge nodes and ignores forged addresses before the client', async t => {
+  const { records, request, tracker } = await site(t, { render: true });
+  await request('/', { headers: {
+    'X-Forwarded-For': '203.0.113.99, 198.51.100.20, 172.64.10.1, 10.29.235.113, 10.31.28.2',
+    'CF-Connecting-IP': '203.0.113.99', 'X-Real-IP': '203.0.113.99',
+  } });
+  await request('/', { headers: { 'X-Forwarded-For': '203.0.113.99, 2001:db8::20, 2606:4700::123, fd00::1' } });
+  await tracker.flush();
+  assert.deepEqual(records.map(record => record.ip), ['198.51.100.20', '2001:db8::20']);
+});
+
+test('the previous Render setting 1 upgrades to subnet trust; explicit render works without auto-detection', async t => {
+  for (const options of [{ render: true, proxy: '1' }, { proxy: 'render' }]) {
+    const { records, request, tracker } = await site(t, options);
+    await request('/', { headers: { 'X-Forwarded-For': '198.51.100.20, 10.29.235.113, 10.31.28.2' } });
+    await tracker.flush();
+    assert.equal(records[0].ip, '198.51.100.20');
+  }
+  const otherHost = await site(t, { proxy: '1' });
+  await otherHost.request('/', { headers: { 'X-Forwarded-For': '198.51.100.20, 10.31.28.2' } });
+  await otherHost.tracker.flush();
+  assert.equal(otherHost.records[0].ip, '10.31.28.2');
+});
+
+test('Render cannot trust forwarding headers supplied by an untrusted direct public peer', () => {
+  const app = express();
+  configureTrustProxy(app, '', { isRender: true });
+  const req = Object.create(app.request);
+  req.socket = { remoteAddress: '198.51.100.20' };
+  req.headers = { 'x-forwarded-for': '203.0.113.99, 10.31.28.2' };
+  assert.equal(req.ip, '198.51.100.20');
+});
+
+test('Render stops at an unknown public proxy or malformed hop instead of searching for any public IP', async t => {
+  const { records, request, tracker } = await site(t, { render: true });
+  await request('/', { headers: { 'X-Forwarded-For': '203.0.113.99, 198.51.100.20, 10.31.28.2' } });
+  await request('/', { headers: { 'X-Forwarded-For': '203.0.113.99, invalid-hop, 10.31.28.2' } });
+  await tracker.flush();
+  assert.equal(records[0].ip, '198.51.100.20');
+  assert.equal(records[1].ip, '127.0.0.1');
+});
+
 test('explicit proxy configuration overrides Render defaults for additional trusted hops or direct access', async t => {
   const extraProxy = await site(t, { render: true, proxy: '2' });
   await extraProxy.request('/', { headers: { 'X-Forwarded-For': '192.0.2.99, 198.51.100.20, 203.0.113.30' } });
