@@ -12,14 +12,14 @@ function addTranslationControl(element) {
   button.className = 'translate-btn';
   button.textContent = '翻译成中文';
   button.setAttribute('aria-pressed', 'false');
-  button.title = '将这段文字发送至 MyMemory 免费翻译';
+  button.title = '将这段文字发送至翻译服务，翻译成中文';
   const status = document.createElement('span');
   status.className = 'translation-status';
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   controls.append(button, status);
   element.after(controls);
-  let translated = '', showingTranslation = false;
+  let translated = '', provider = '', showingTranslation = false;
 
   button.addEventListener('click', async event => {
     event.stopPropagation();
@@ -51,6 +51,7 @@ function addTranslationControl(element) {
         if (!response.ok) throw new Error(result.error || '翻译暂时不可用，请重试。');
         if (typeof result.translatedText !== 'string' || !result.translatedText.trim()) throw new Error('未收到译文，请重试。');
         translated = result.translatedText;
+        provider = ['DeepL', 'MyMemory'].includes(result.provider) ? result.provider : '';
       }
       if (!element.isConnected) return;
       element.textContent = translated;
@@ -58,7 +59,7 @@ function addTranslationControl(element) {
       showingTranslation = true;
       button.textContent = '查看原文';
       button.setAttribute('aria-pressed', 'true');
-      status.textContent = 'MyMemory · 机器翻译';
+      status.textContent = provider ? provider + ' · 机器翻译' : '机器翻译';
     } catch (error) {
       if (!element.isConnected) return;
       button.textContent = '重试翻译';

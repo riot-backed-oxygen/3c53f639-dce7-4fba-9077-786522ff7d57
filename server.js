@@ -12,7 +12,11 @@ app.use('/api/analytics', createAnalyticsRouter({ store: analyticsStore, tracker
 app.use(express.static(path.join(__dirname,'public')));
 analyticsStore.initialize().catch(error => console.error('[analytics] Initialization failed:', error.code || error.name));
 const { createTranslationRouter } = require('./translation');
-app.use('/api/translate', createTranslationRouter({ email: process.env.MYMEMORY_EMAIL || '' }));
+app.use('/api/translate', createTranslationRouter({
+  email: process.env.MYMEMORY_EMAIL || '',
+  provider: process.env.TRANSLATION_PROVIDER || 'auto',
+  deeplApiKey: process.env.DEEPL_API_KEY || process.env.DEEPL_AUTH_KEY || '',
+}));
 function parseRow(r){for(const k of ['social_links','listing_data','profile_data'])if(typeof r[k]==='string')try{r[k]=JSON.parse(r[k])}catch{}return r}
 const { buildActressQueries } = require('./actress-query');
 app.get('/api/actresses', async (req, res) => {

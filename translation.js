@@ -32,8 +32,12 @@ function splitText(text, maxBytes = 450) {
   return chunks;
 }
 
-function createTranslationService({ fetchImpl = globalThis.fetch, email = '', now = Date.now,
+function createTranslationService({ fetchImpl = globalThis.fetch, email = '', provider = 'auto',
+  deeplApiKey = '', now = Date.now,
   timeoutMs = 12000, totalTimeoutMs = 45000, cacheTtlMs = 86400000, cacheLimit = 500 } = {}) {
+  deeplApiKey = deeplApiKey.trim();
+  provider = provider.trim().toLowerCase() || 'auto';
+  const selectedProvider = provider === 'auto' ? (deeplApiKey ? 'deepl' : 'mymemory') : provider;
   const cache = new Map(), pending = new Map();
   let active = 0;
 
@@ -93,15 +97,61 @@ function createTranslationService({ fetchImpl = globalThis.fetch, email = '', no
     return text.match(/^\s*/u)[0] + translated + text.match(/\s*$/u)[0];
   }
 
+  async function translateDeepL(text, deadline) {
+    // API Free keys end in :fx; keep credentials in the server-side header only.
+    const endpoint = deeplApiKey.endsWith(':fx') ? 'https://api-free.deepl.com/v2/translate' :
+      'https://api.deepl.com/v2/translate';
+    const signal = AbortSignal.timeout(Math.min(timeoutMs, Math.max(1, deadline - Date.now())));
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: 'DeepL-Auth-Key ' + deeplApiKey,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        // Send the whole text to preserve context; the local 6000-byte limit fits DeepL's request limit.
+        body: JSON.stringify({ text: [text], source_lang: 'JA', target_lang: 'ZH-HANS', preserve_formatting: true }),
+        signal,
+      });
+      if (response.status === 401 || response.status === 403) {
+        throw new TranslationError('DeepL 身份验证失败，请管理员检查 API Key 和账户权限。', 503);
+      }
+      if (response.status === 429) throw new TranslationError('DeepL 请求过于频繁，请稍后重试。', 429);
+      if (response.status === 456) throw new TranslationError('DeepL 翻译额度已用完，请管理员检查账户额度。', 429);
+      if (!response.ok) throw new TranslationError('DeepL 翻译服务暂时不可用，请稍后重试。');
+      const result = await response.json();
+      const translations = result?.translations;
+      const output = translations?.[0]?.text;
+      if (!Array.isArray(translations) || translations.length !== 1 || typeof output !== 'string' || !output.trim()) {
+        throw new TranslationError('DeepL 未返回有效译文，请稍后重试。');
+      }
+      return output.trim();
+    } catch (error) {
+      if (error instanceof TranslationError) throw error;
+      if (signal.aborted || error.name === 'TimeoutError' || error.name === 'AbortError') {
+        throw new TranslationError('DeepL 翻译请求超时，请稍后重试。', 504);
+      }
+      throw new TranslationError('无法连接 DeepL 翻译服务，请稍后重试。');
+    }
+  }
+
   return async function translate(text) {
     if (typeof text !== 'string' || !text.trim()) throw new TranslationError('请提供需要翻译的文本。', 400);
     text = text.trim();
     if (Buffer.byteLength(text, 'utf8') > 6000) throw new TranslationError('文本过长，请缩短到 6000 字节以内再翻译。', 400);
+    if (!['deepl', 'mymemory'].includes(selectedProvider)) {
+      throw new TranslationError('翻译服务配置无效，请管理员检查 TRANSLATION_PROVIDER。', 503);
+    }
+    if (selectedProvider === 'deepl' && !deeplApiKey) {
+      throw new TranslationError('DeepL 尚未配置，请管理员设置 DEEPL_API_KEY。', 503);
+    }
     const translatedText = await remember('text:' + text, async () => {
       if (active >= 4) throw new TranslationError('翻译请求较多，请稍后重试。', 429);
       active++;
       const deadline = Date.now() + totalTimeoutMs;
       try {
+        if (selectedProvider === 'deepl') return await translateDeepL(text, deadline);
         const results = [];
         for (const chunk of splitText(text)) {
           if (Date.now() >= deadline) throw new TranslationError('翻译请求超时，请稍后重试。', 504);
@@ -112,7 +162,7 @@ function createTranslationService({ fetchImpl = globalThis.fetch, email = '', no
         active--;
       }
     });
-    return { translatedText, source: 'ja', target: 'zh-CN', provider: 'MyMemory' };
+    return { translatedText, source: 'ja', target: 'zh-CN', provider: selectedProvider === 'deepl' ? 'DeepL' : 'MyMemory' };
   };
 }
 

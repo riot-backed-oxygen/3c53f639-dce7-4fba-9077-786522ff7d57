@@ -17,6 +17,7 @@ translated = "今天天气不错。"
 actress = {"actress_id": "demo", "name": "测试档案", "name_kana": "テスト", "profile_text": original}
 movie = {"id": "DEMO-001", "title": original, "date": "2026-09-24", "img": "", "stars": [], "genres": [], "samples": []}
 mode = {"value": "success"}
+provider = os.environ.get("TRANSLATION_TEST_PROVIDER", "DeepL")
 
 
 def respond(route, data, status=200):
@@ -26,11 +27,13 @@ def respond(route, data, status=200):
 def translate(route):
     requests.append(route.request.post_data_json)
     if mode["value"] == "quota":
-        respond(route, {"error": "免费翻译额度已用完，请稍后再试。"}, 429)
+        respond(route, {"error": provider + " 翻译额度已用完，请稍后再试。"}, 429)
+    elif mode["value"] == "configuration":
+        respond(route, {"error": "DeepL 尚未配置，请管理员设置 DEEPL_API_KEY。"}, 503)
     elif mode["value"] == "html":
-        respond(route, {"translatedText": "<img src=x onerror=alert(1)>测试译文", "provider": "MyMemory"})
+        respond(route, {"translatedText": "<img src=x onerror=alert(1)>测试译文", "provider": provider})
     else:
-        respond(route, {"translatedText": translated, "provider": "MyMemory"})
+        respond(route, {"translatedText": translated, "provider": provider})
 
 
 with sync_playwright() as p:
@@ -58,12 +61,14 @@ with sync_playwright() as p:
     profile_button.click()
     expect(page.locator("#detail .bio")).to_have_text(translated)
     assert requests == [{"text": original}]
+    expect(page.locator("#detail .translation-status")).to_have_text(provider + " · 机器翻译")
     expect(profile_button).to_have_attribute("aria-pressed", "true")
     profile_button.click()
     expect(page.locator("#detail .bio")).to_have_text(original)
     profile_button.click()
     expect(page.locator("#detail .bio")).to_have_text(translated)
     assert len(requests) == 1, "Toggling must reuse the fetched translation"
+    expect(page.locator("#detail .translation-status")).to_have_text(provider + " · 机器翻译")
     page.locator("#worksBtn").click()
     expect(page.locator(".movie-card")).to_have_count(1)
     page.locator(".movie-card .translate-btn").click()
@@ -74,6 +79,11 @@ with sync_playwright() as p:
     expect(page.locator("#moviePage")).to_be_visible()
     expect(page.locator("#moviePage h2")).to_have_text(original)
     detail_button = page.locator("#moviePage .translate-btn")
+    mode["value"] = "configuration"
+    detail_button.click()
+    expect(page.locator("#moviePage .translation-error")).to_contain_text("DEEPL_API_KEY")
+    expect(page.locator("#moviePage h2")).to_have_text(original)
+    expect(detail_button).to_be_enabled()
     mode["value"] = "quota"
     detail_button.click()
     expect(page.locator("#moviePage .translation-error")).to_contain_text("额度已用完")
@@ -97,6 +107,6 @@ with sync_playwright() as p:
     expect(page.locator("#moviePage h2")).to_have_text("<img src=x onerror=alert(1)>测试译文")
     expect(page.locator("#moviePage h2 img")).to_have_count(0)
     assert not errors, errors
-    print("PASS: profile/list/detail translation, toggles, quota retry, plain-text safety, mobile layout")
+    print("PASS:", provider, "profile/list/detail translation, provider label, toggles, configuration/quota retry, plain-text safety, mobile layout")
     print("Screenshots:", artifact_dir)
     browser.close()
